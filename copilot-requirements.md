@@ -7,7 +7,7 @@
 **Created:** November 16, 2025  
 **Platform:** Web Application (React + Vite)
 
-## Purpose
+## Purpose ##
 A modern web application that allows users to fetch YouTube video transcripts by pasting a URL and download them in multiple formats (TXT, JSON, Markdown). The app emphasizes a futuristic, neon-themed UI with glassmorphism effects.
 
 ---
@@ -525,3 +525,4 @@ bun run build     # Production build
 ---
 
 *Last Updated: November 16, 2025*
+
