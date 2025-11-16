@@ -52,5 +52,5 @@ jobs:
         with:
           app-name: 'YoutubeTranscriber'
           slot-name: 'Production'
-          package: ./node-app
+          package: .
           publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_C04D9CD83ACF4DF899EF468B166D3416 }}
