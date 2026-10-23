@@ -1,8 +1,12 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ResultSurvey } from "@/components/ResultSurvey";
+import { useFeedback } from "@/components/FeedbackContext";
 import { useToast } from "@/hooks/use-toast";
 import { Download, Loader2, Sparkles, FileText, FileJson, FileCode } from "lucide-react";
+import type { FeedbackErrorType } from "@/lib/feedback";
+import { API_BASE_URL } from "@/lib/api";
 
 // YouTube URL validation regex
 const YOUTUBE_URL_REGEX = /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)[\w-]+/;
@@ -29,8 +33,11 @@ const Index = () => {
   const [url, setUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [transcriptData, setTranscriptData] = useState<TranscriptData | null>(null);
+  const [downloadedVideoId, setDownloadedVideoId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [errorType, setErrorType] = useState<FeedbackErrorType | null>(null);
   const { toast } = useToast();
+  const { openFeedback } = useFeedback();
 
   const validateUrl = (url: string): boolean => {
     return YOUTUBE_URL_REGEX.test(url.trim());
@@ -61,25 +68,30 @@ const Index = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setErrorType(null);
     
     if (!url.trim()) {
       setError("Please enter a YouTube URL");
+      setErrorType("invalid_url");
       return;
     }
 
     if (!validateUrl(url)) {
       setError("Please enter a valid YouTube URL");
+      setErrorType("invalid_url");
       return;
     }
 
     setIsLoading(true);
     setTranscriptData(null); // Clear previous data
+    setDownloadedVideoId(null);
     
     try {
       // Extract video ID from URL
       const videoId = extractVideoId(url);
       
       if (!videoId) {
+        setErrorType("invalid_url");
         throw new Error("Could not extract video ID from URL");
       }
 
@@ -90,7 +102,7 @@ const Index = () => {
       const timeoutId = setTimeout(() => controller.abort(), 30000);
 
       // Call actual API endpoint
-      const apiUrl = `https://transcriberapi2-hahuhgd4caayd2by.centralindia-01.azurewebsites.net/api/GetTranscript?videoId=${videoId}`;
+      const apiUrl = `${API_BASE_URL}/GetTranscript?videoId=${encodeURIComponent(videoId)}`;
       
       console.log("API URL:", apiUrl);
       
@@ -142,6 +154,7 @@ const Index = () => {
       }
 
       if (data.transcript.length === 0) {
+        setErrorType("no_captions");
         throw new Error("No transcript available for this video. It may not have captions.");
       }
       
@@ -169,16 +182,27 @@ const Index = () => {
       let errorDetails = "";
       
       if (err instanceof Error) {
-        if (err.name === 'AbortError') {
+        if (err.message.includes("No transcript available")) {
+          setErrorType("no_captions");
+          errorMessage = err.message;
+        } else if (err.message.includes("Could not extract video ID")) {
+          setErrorType("invalid_url");
+          errorMessage = err.message;
+        } else if (err.name === 'AbortError') {
+          setErrorType("fetch_timeout");
           errorMessage = "Request timed out. The video may be too long or the server is busy.";
           errorDetails = "Try a shorter video or wait a moment and retry.";
         } else if (err.name === 'TypeError' && err.message.includes('Failed to fetch')) {
+          setErrorType("network_error");
           errorMessage = "Network error or CORS issue detected.";
           errorDetails = "The API may be blocking requests from this domain. Check browser console for CORS errors.";
         } else if (err.message.includes('JSON')) {
+          setErrorType("parse_error");
           errorMessage = "Failed to parse API response.";
           errorDetails = err.message;
         } else {
+          if (err.message.startsWith("API Error:")) setErrorType("http_error");
+          else if (!errorType) setErrorType("unknown");
           errorMessage = err.message;
           errorDetails = "Check browser console (F12) for detailed error logs.";
         }
@@ -212,6 +236,7 @@ const Index = () => {
     if (!transcriptData) return;
     const filename = `${transcriptData.videoId}-transcript.txt`;
     downloadFile(transcriptData.transcript, filename, "text/plain");
+    setDownloadedVideoId(transcriptData.videoId);
     toast({ description: "Downloaded as TXT" });
   };
 
@@ -226,6 +251,7 @@ const Index = () => {
     }, null, 2);
     const filename = `${transcriptData.videoId}-transcript.json`;
     downloadFile(jsonContent, filename, "application/json");
+    setDownloadedVideoId(transcriptData.videoId);
     toast({ description: "Downloaded as JSON" });
   };
 
@@ -245,6 +271,7 @@ const Index = () => {
     
     const filename = `${transcriptData.videoId}-transcript.md`;
     downloadFile(mdContent, filename, "text/markdown");
+    setDownloadedVideoId(transcriptData.videoId);
     toast({ description: "Downloaded as Markdown" });
   };
 
@@ -302,10 +329,24 @@ const Index = () => {
                   Example: https://www.youtube.com/watch?v=XXXXXXXXXXX
                 </p>
                 {error && (
-                  <p className="text-sm text-destructive animate-fade-in pl-1 flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-destructive animate-pulse" />
-                    {error}
-                  </p>
+                    <div className="space-y-1">
+                      <p className="text-sm text-destructive animate-fade-in pl-1 flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-destructive animate-pulse" />
+                        {error}
+                      </p>
+                      <button
+                        type="button"
+                        className="min-h-11 pl-1 text-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        onClick={() => openFeedback({
+                          source: "failure",
+                          category: "something_broke",
+                          errorType: errorType ?? "unknown",
+                          videoUrl: url.trim(),
+                        })}
+                      >
+                        What were you trying to do? Tell us
+                      </button>
+                    </div>
                 )}
               </div>
 
@@ -390,6 +431,11 @@ const Index = () => {
                       Markdown
                     </Button>
                   </div>
+                  <ResultSurvey
+                    key={transcriptData.videoId}
+                    videoId={transcriptData.videoId}
+                    triggered={downloadedVideoId === transcriptData.videoId}
+                  />
                 </div>
               </div>
             )}
@@ -398,7 +444,7 @@ const Index = () => {
           {/* Privacy Note */}
           <div className="mt-8 text-center">
             <p className="text-sm text-muted-foreground glass-card inline-block px-6 py-3 rounded-full border border-border/30">
-              🔒 We only use your link to fetch the transcript. No data is stored after you close the page.
+              We use your link to fetch the transcript. Feedback is stored only if you choose to send it; your video link is included only if you opt in.
             </p>
           </div>
         </div>
@@ -406,6 +452,13 @@ const Index = () => {
         {/* Footer */}
         <footer className="mt-20 text-center text-sm text-muted-foreground animate-fade-in" style={{ animationDelay: "0.4s" }}>
           <p>Built with ❤️ using modern web technologies</p>
+          <button
+            type="button"
+            className="mt-2 min-h-11 px-3 text-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => openFeedback()}
+          >
+            Feedback
+          </button>
         </footer>
       </div>
     </div>
