@@ -275,7 +275,7 @@ const Index = () => {
             Transcript<span className="text-primary">X</span>
           </h1>
           <p className="text-xl md:text-2xl text-muted-foreground mb-2">
-            Paste a YouTube link. Download clean transcripts in seconds.
+            Paste a YouTube link. Get your transcript in seconds.
           </p>
           <p className="text-sm text-muted-foreground">
             Supports TXT, JSON, and Markdown formats
