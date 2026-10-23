@@ -85,17 +85,16 @@ const Index = () => {
     setIsLoading(true);
     setTranscriptData(null); // Clear previous data
     setDownloadedVideoId(null);
+    let failureType: FeedbackErrorType = "unknown";
     
     try {
       // Extract video ID from URL
       const videoId = extractVideoId(url);
       
       if (!videoId) {
-        setErrorType("invalid_url");
-        throw new Error("Could not extract video ID from URL");
+        failureType = "invalid_url";
+        throw new Error("invalid_url");
       }
-
-      console.log("Fetching transcript for video ID:", videoId);
 
       // Create AbortController for timeout (30 seconds to handle 15s response time)
       const controller = new AbortController();
@@ -103,8 +102,6 @@ const Index = () => {
 
       // Call actual API endpoint
       const apiUrl = `${API_BASE_URL}/GetTranscript?videoId=${encodeURIComponent(videoId)}`;
-      
-      console.log("API URL:", apiUrl);
       
       const response = await fetch(apiUrl, {
         method: "GET",
@@ -114,55 +111,47 @@ const Index = () => {
 
       clearTimeout(timeoutId);
 
-      console.log("Response status:", response.status);
-      console.log("Response headers:", Object.fromEntries(response.headers.entries()));
-
       if (!response.ok) {
-        const errorText = await response.text().catch(() => "Unable to read error");
-        console.error("API Error Response:", errorText);
-        throw new Error(`API Error: ${response.status} ${response.statusText}`);
+        const errorBody = await response.json().catch(() => null);
+        const errorCode = typeof errorBody?.error === "string" ? errorBody.error : "";
+        if (errorCode === "transcript_unavailable" || errorCode === "video_unavailable") {
+          failureType = "no_captions";
+        } else {
+          failureType = "http_error";
+        }
+        throw new Error(errorCode || "request_failed");
       }
 
       // Check content type
       const contentType = response.headers.get("content-type");
-      console.log("Content-Type:", contentType);
       
       if (!contentType || !contentType.includes("application/json")) {
-        const responseText = await response.text();
-        console.error("Non-JSON response received:", responseText.substring(0, 500));
-        throw new Error(`Expected JSON response, got: ${contentType || 'unknown'}`);
+        failureType = "parse_error";
+        throw new Error("invalid_response");
       }
 
       // Try to parse JSON with error handling
       let data: ApiResponse;
-      const responseText = await response.text();
-      console.log("Response size:", responseText.length, "characters");
-      
       try {
-        data = JSON.parse(responseText);
-        console.log("Parsed transcript segments:", data.transcript?.length || 0);
-      } catch (parseError) {
-        console.error("JSON Parse Error:", parseError);
-        console.error("Response preview:", responseText.substring(0, 1000));
-        throw new Error("Failed to parse API response. The response may be malformed.");
+        data = await response.json();
+      } catch {
+        failureType = "parse_error";
+        throw new Error("invalid_response");
       }
 
       // Validate response structure
       if (!data.transcript || !Array.isArray(data.transcript)) {
-        console.error("Invalid response structure:", data);
-        throw new Error("Invalid response format: transcript array not found");
+        failureType = "parse_error";
+        throw new Error("invalid_response");
       }
 
       if (data.transcript.length === 0) {
-        setErrorType("no_captions");
-        throw new Error("No transcript available for this video. It may not have captions.");
+        failureType = "no_captions";
+        throw new Error("transcript_unavailable");
       }
       
       // Convert segments to full transcript text with proper line breaks
       const fullTranscript = data.transcript.map(segment => segment.text).join('\n');
-      
-      console.log("Full transcript length:", fullTranscript.length, "characters");
-      console.log("Total segments:", data.transcript.length);
       
       setTranscriptData({
         videoId: data.videoId,
@@ -176,43 +165,30 @@ const Index = () => {
         description: `Transcript fetched successfully (${data.transcript.length} segments)`,
       });
     } catch (err) {
-      console.error("Error fetching transcript:", err);
-      
-      let errorMessage = "Failed to fetch transcript. Please try again.";
-      let errorDetails = "";
-      
       if (err instanceof Error) {
-        if (err.message.includes("No transcript available")) {
-          setErrorType("no_captions");
-          errorMessage = err.message;
-        } else if (err.message.includes("Could not extract video ID")) {
-          setErrorType("invalid_url");
-          errorMessage = err.message;
-        } else if (err.name === 'AbortError') {
-          setErrorType("fetch_timeout");
-          errorMessage = "Request timed out. The video may be too long or the server is busy.";
-          errorDetails = "Try a shorter video or wait a moment and retry.";
+        if (err.name === "AbortError") {
+          failureType = "fetch_timeout";
         } else if (err.name === 'TypeError' && err.message.includes('Failed to fetch')) {
-          setErrorType("network_error");
-          errorMessage = "Network error or CORS issue detected.";
-          errorDetails = "The API may be blocking requests from this domain. Check browser console for CORS errors.";
-        } else if (err.message.includes('JSON')) {
-          setErrorType("parse_error");
-          errorMessage = "Failed to parse API response.";
-          errorDetails = err.message;
-        } else {
-          if (err.message.startsWith("API Error:")) setErrorType("http_error");
-          else if (!errorType) setErrorType("unknown");
-          errorMessage = err.message;
-          errorDetails = "Check browser console (F12) for detailed error logs.";
+          failureType = "network_error";
         }
       }
-      
+
+      const friendlyErrors: Record<FeedbackErrorType, string> = {
+        invalid_url: "Please enter a valid YouTube video link.",
+        fetch_timeout: "This request took too long. Please try again.",
+        network_error: "We couldn't reach the transcript service. Please try again.",
+        no_captions: "Transcripts aren't available for this video. It may be private, unavailable, or have captions disabled.",
+        http_error: "We couldn't fetch this transcript right now. Please try again later.",
+        parse_error: "We couldn't process this transcript response. Please try again.",
+        unknown: "Something went wrong while fetching this transcript. Please try again.",
+      };
+      setErrorType(failureType);
+      const errorMessage = friendlyErrors[failureType];
       setError(errorMessage);
       
       toast({
         title: "Error",
-        description: errorDetails || errorMessage,
+        description: errorMessage,
         variant: "destructive",
       });
     } finally {
