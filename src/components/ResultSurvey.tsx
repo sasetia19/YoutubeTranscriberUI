@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { submitFeedback, type SurveyUseCase } from "@/lib/feedback";
+import { trackUmamiEvent } from "@/lib/analytics";
 
 const COOLDOWN_KEY = "transcriptx-feedback-survey-last-shown";
 const TRANSCRIPT_KEY_PREFIX = "transcriptx-feedback-survey-done:";
@@ -90,6 +91,7 @@ export function ResultSurvey({ videoId, triggered }: { videoId: string; triggere
         use_case_other: useCase === "other" ? otherUseCase : undefined,
         helpful,
       });
+      trackUmamiEvent({ name: "feedback_submitted", data: { source: "survey" } });
       storageSet(`${TRANSCRIPT_KEY_PREFIX}${videoId}`, "1");
       setStatus("success");
     } catch {
