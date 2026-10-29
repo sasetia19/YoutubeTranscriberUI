@@ -23,6 +23,14 @@
 
   <body>
     <div id="root"></div>
+    <script
+      type="module"
+      src="/src/lib/umami-loader.ts"
+      data-umami-bootstrap
+      data-website-id="%VITE_UMAMI_WEBSITE_ID%"
+      data-domains="transcriptsx.com,www.transcriptsx.com"
+      data-exclude-search="true"
+    ></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -10,6 +10,7 @@ import {
   submitFeedback,
   type FeedbackCategory,
 } from "@/lib/feedback";
+import { trackUmamiEvent } from "@/lib/analytics";
 
 const CATEGORIES: { value: FeedbackCategory; label: string }[] = [
   { value: "something_broke", label: "Something broke" },
@@ -99,6 +100,7 @@ function FeedbackDialog({
         video_url: includeVideoUrl ? options.videoUrl : undefined,
         website: honeypotRef.current?.value ?? "",
       });
+      trackUmamiEvent({ name: "feedback_submitted", data: { source } });
       setStatus("success");
     } catch {
       setStatus("error");

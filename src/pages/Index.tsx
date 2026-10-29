@@ -7,6 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Download, Loader2, Sparkles, FileText, FileJson, FileCode } from "lucide-react";
 import type { FeedbackErrorType } from "@/lib/feedback";
 import { API_BASE_URL } from "@/lib/api";
+import { trackUmamiEvent, type UmamiErrorType } from "@/lib/analytics";
 
 // YouTube URL validation regex
 const YOUTUBE_URL_REGEX = /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)[\w-]+/;
@@ -27,6 +28,39 @@ interface TranscriptData {
   title?: string;
   transcript: string;
   segments: TranscriptSegment[];
+}
+
+const UMAMI_ERROR_TYPES = new Set<UmamiErrorType>([
+  "invalid_url",
+  "transcript_unavailable",
+  "video_unavailable",
+  "rate_limited",
+  "proxy_blocked",
+  "timeout",
+  "network_error",
+  "invalid_response",
+  "upstream_error",
+  "unknown",
+]);
+
+function getUmamiErrorType(errorCode: string, statusCode: number): UmamiErrorType {
+  if (UMAMI_ERROR_TYPES.has(errorCode as UmamiErrorType)) return errorCode as UmamiErrorType;
+  if (statusCode === 400) return "invalid_url";
+  if (statusCode === 422) return "transcript_unavailable";
+  if (statusCode === 429) return "rate_limited";
+  if (statusCode === 504) return "timeout";
+  if (statusCode >= 500) return "upstream_error";
+  return "unknown";
+}
+
+function getUiErrorType(errorType: UmamiErrorType): FeedbackErrorType {
+  if (errorType === "transcript_unavailable" || errorType === "video_unavailable") return "no_captions";
+  if (errorType === "timeout") return "fetch_timeout";
+  if (errorType === "invalid_response") return "parse_error";
+  if (errorType === "proxy_blocked" || errorType === "rate_limited" || errorType === "upstream_error") {
+    return "http_error";
+  }
+  return errorType;
 }
 
 const Index = () => {
@@ -69,16 +103,20 @@ const Index = () => {
     e.preventDefault();
     setError("");
     setErrorType(null);
+    let requestedVideoId: string | undefined;
+    let analyticsErrorType: UmamiErrorType = "unknown";
     
     if (!url.trim()) {
       setError("Please enter a YouTube URL");
       setErrorType("invalid_url");
+      trackUmamiEvent({ name: "transcript_failed", data: { error_type: "invalid_url" } });
       return;
     }
 
     if (!validateUrl(url)) {
       setError("Please enter a valid YouTube URL");
       setErrorType("invalid_url");
+      trackUmamiEvent({ name: "transcript_failed", data: { error_type: "invalid_url" } });
       return;
     }
 
@@ -90,8 +128,10 @@ const Index = () => {
     try {
       // Extract video ID from URL
       const videoId = extractVideoId(url);
+      requestedVideoId = videoId ?? undefined;
       
       if (!videoId) {
+        analyticsErrorType = "invalid_url";
         failureType = "invalid_url";
         throw new Error("invalid_url");
       }
@@ -114,11 +154,8 @@ const Index = () => {
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
         const errorCode = typeof errorBody?.error === "string" ? errorBody.error : "";
-        if (errorCode === "transcript_unavailable" || errorCode === "video_unavailable") {
-          failureType = "no_captions";
-        } else {
-          failureType = "http_error";
-        }
+        analyticsErrorType = getUmamiErrorType(errorCode, response.status);
+        failureType = getUiErrorType(analyticsErrorType);
         throw new Error(errorCode || "request_failed");
       }
 
@@ -126,6 +163,7 @@ const Index = () => {
       const contentType = response.headers.get("content-type");
       
       if (!contentType || !contentType.includes("application/json")) {
+        analyticsErrorType = "invalid_response";
         failureType = "parse_error";
         throw new Error("invalid_response");
       }
@@ -135,17 +173,20 @@ const Index = () => {
       try {
         data = await response.json();
       } catch {
+        analyticsErrorType = "invalid_response";
         failureType = "parse_error";
         throw new Error("invalid_response");
       }
 
       // Validate response structure
       if (!data.transcript || !Array.isArray(data.transcript)) {
+        analyticsErrorType = "invalid_response";
         failureType = "parse_error";
         throw new Error("invalid_response");
       }
 
       if (data.transcript.length === 0) {
+        analyticsErrorType = "transcript_unavailable";
         failureType = "no_captions";
         throw new Error("transcript_unavailable");
       }
@@ -159,6 +200,10 @@ const Index = () => {
         transcript: fullTranscript,
         segments: data.transcript,
       });
+      trackUmamiEvent({
+        name: "transcript_succeeded",
+        data: { video_id: requestedVideoId },
+      });
       
       toast({
         title: "Success!",
@@ -167,11 +212,21 @@ const Index = () => {
     } catch (err) {
       if (err instanceof Error) {
         if (err.name === "AbortError") {
+          analyticsErrorType = "timeout";
           failureType = "fetch_timeout";
         } else if (err.name === 'TypeError' && err.message.includes('Failed to fetch')) {
+          analyticsErrorType = "network_error";
           failureType = "network_error";
         }
       }
+
+      trackUmamiEvent({
+        name: "transcript_failed",
+        data: {
+          error_type: analyticsErrorType,
+          ...(requestedVideoId ? { video_id: requestedVideoId } : {}),
+        },
+      });
 
       const friendlyErrors: Record<FeedbackErrorType, string> = {
         invalid_url: "Please enter a valid YouTube video link.",
@@ -212,6 +267,7 @@ const Index = () => {
     if (!transcriptData) return;
     const filename = `${transcriptData.videoId}-transcript.txt`;
     downloadFile(transcriptData.transcript, filename, "text/plain");
+    trackUmamiEvent({ name: "transcript_downloaded", data: { format: "txt", video_id: transcriptData.videoId } });
     setDownloadedVideoId(transcriptData.videoId);
     toast({ description: "Downloaded as TXT" });
   };
@@ -227,6 +283,7 @@ const Index = () => {
     }, null, 2);
     const filename = `${transcriptData.videoId}-transcript.json`;
     downloadFile(jsonContent, filename, "application/json");
+    trackUmamiEvent({ name: "transcript_downloaded", data: { format: "json", video_id: transcriptData.videoId } });
     setDownloadedVideoId(transcriptData.videoId);
     toast({ description: "Downloaded as JSON" });
   };
@@ -247,6 +304,7 @@ const Index = () => {
     
     const filename = `${transcriptData.videoId}-transcript.md`;
     downloadFile(mdContent, filename, "text/markdown");
+    trackUmamiEvent({ name: "transcript_downloaded", data: { format: "md", video_id: transcriptData.videoId } });
     setDownloadedVideoId(transcriptData.videoId);
     toast({ description: "Downloaded as Markdown" });
   };
@@ -268,7 +326,6 @@ const Index = () => {
 
       {/* Content */}
       <div className="relative z-10 container mx-auto px-4 py-12 md:py-20">
-        {/* Hero Section */}
         <div className="text-center mb-12 animate-fade-in-up">
           <div className="inline-flex items-center gap-2 mb-4 text-primary">
             <Sparkles className="w-6 h-6" />
@@ -417,20 +474,13 @@ const Index = () => {
             )}
           </div>
 
-          {/* Privacy Note */}
-          <div className="mt-8 text-center">
-            <p className="text-sm text-muted-foreground glass-card inline-block px-6 py-3 rounded-full border border-border/30">
-              We use your link to fetch the transcript. Feedback is stored only if you choose to send it; your video link is included only if you opt in.
-            </p>
-          </div>
         </div>
 
         {/* Footer */}
         <footer className="mt-20 text-center text-sm text-muted-foreground animate-fade-in" style={{ animationDelay: "0.4s" }}>
-          <p>Built with ❤️ using modern web technologies</p>
           <button
             type="button"
-            className="mt-2 min-h-11 px-3 text-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="min-h-11 px-3 text-sm text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             onClick={() => openFeedback()}
           >
             Feedback
