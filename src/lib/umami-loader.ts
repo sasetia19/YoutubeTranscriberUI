@@ -1,6 +1,5 @@
 const ALLOWED_HOSTNAMES = new Set(["transcriptsx.com", "www.transcriptsx.com"]);
-const bootstrap = document.querySelector<HTMLScriptElement>("script[data-umami-bootstrap]");
-const websiteId = bootstrap?.dataset.websiteId;
+const websiteId = import.meta.env.VITE_UMAMI_WEBSITE_ID;
 
 if (
   ALLOWED_HOSTNAMES.has(window.location.hostname) &&
